@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editable HTML Poster Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        .stage-content {
+            all: initial;
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        [data-editable] {
+            outline: none;
+            cursor: move;
+        }
+        [data-editable]:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app" class="flex flex-col h-screen">
+        <!-- Toolbar -->
+        <div class="bg-white border-b border-gray-200 p-4 flex gap-2 flex-wrap items-center shadow-sm">
+            <button id="importBtn" class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                📁 Import HTML
+            </button>
+            <button id="pasteBtn" class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                📋 Paste HTML
+            </button>
+
+            <div class="border-l border-gray-300 h-6 mx-2"></div>
+
+            <button id="addTextBtn" class="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition">
+                ➕ Text
+            </button>
+            <button id="addImageBtn" class="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition">
+                ➕ Image
+            </button>
+
+            <div class="border-l border-gray-300 h-6 mx-2"></div>
+
+            <button id="undoBtn" class="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition disabled:opacity-50" disabled>
+                ↶ Undo
+            </button>
+            <button id="redoBtn" class="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition disabled:opacity-50" disabled>
+                ↷ Redo
+            </button>
+
+            <div class="border-l border-gray-300 h-6 mx-2"></div>
+
+            <button id="exportBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition">
+                📥 Export
+            </button>
+
+            <input id="fileInput" type="file" accept=".html" class="hidden">
+            <input id="imageInput" type="file" accept="image/*" class="hidden">
+        </div>
+
+        <div class="flex flex-1 gap-4 p-4 overflow-hidden">
+            <!-- Stage (Canvas) -->
+            <div class="flex-1 flex items-center justify-center bg-gray-100 rounded-lg">
+                <div id="stage" class="relative border-2 border-gray-400 bg-white overflow-hidden cursor-default" style="width: 720px; height: 720px;">
+                    <div id="stageContainer" class="w-full h-full relative" style="all: revert;"></div>
+                    <div id="selectionBox" class="absolute pointer-events-none border-3 border-blue-500" style="display: none; box-sizing: border-box;"></div>
+                </div>
+            </div>
+
+            <!-- Properties Panel -->
+            <div class="w-80 bg-white rounded-lg border border-gray-200 p-4 shadow-sm overflow-y-auto">
+                <h2 class="text-lg font-bold mb-4 text-gray-800">Properties</h2>
+                <div id="propertiesPanel">
+                    <div class="text-center text-gray-500 py-8">
+                        Click an element to select it
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="bg-white border-t border-gray-200 px-4 py-2 text-sm text-gray-600 flex justify-between items-center">
+            <div id="statusLeft">Ready</div>
+            <div class="text-xs text-gray-500">Keyboard: Delete to remove | Ctrl+Z / Ctrl+Y to undo/redo</div>
+        </div>
+    </div>
+
+    <script>
+        const DEFAULT_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Sample Poster</title>
+<style>
+body { margin: 0; padding: 0; }
+.poster {
+width: 720px; height: 720px; position: relative;
+background: #f3f4f6; overflow: hidden; font-family: sans-serif;
+}
+.title {
+position: absolute; top: 80px; left: 40px;
+font-size: 48px; font-weight: bold; color: #111827;
+}
+.subtitle {
+position: absolute; top: 160px; left: 40px;
+font-size: 20px; color: #374151;
+}
+.hero {
+position: absolute; bottom: 0; right: 0; width: 380px; height: 380px;
+object-fit: cover; border-top-left-radius: 16px;
+}
+</style>
+</head>
+<body>
+<div class="poster">
+<h1 class="title">Summer Sale</h1>
+<p class="subtitle">Up to <strong>50% off</strong> on select items!</p>
+<img class="hero" src="https://images.unsplash.com/photo-1520975922284-7bcd4290b0e1?q=80&w=1200&auto=format&fit=crop" alt="Model" />
+</div>
+</body>
+</html>`;
+
+        // State
+        let htmlContent = DEFAULT_HTML;
+        let selectedElement = null;
+        let history = [DEFAULT_HTML];
+        let historyIndex = 0;
+        let isDragging = false;
+        let dragOffset = { x: 0, y: 0 };
+
+        // DOM Elements
+        const stage = document.getElementById('stage');
+        const stageContainer = document.getElementById('stageContainer');
+        const selectionBox = document.getElementById('selectionBox');
+        const propertiesPanel = document.getElementById('propertiesPanel');
+        const fileInput = document.getElementById('fileInput');
+        const imageInput = document.getElementById('imageInput');
+        const statusLeft = document.getElementById('statusLeft');
+
+        // Buttons
+        const importBtn = document.getElementById('importBtn');
+        const pasteBtn = document.getElementById('pasteBtn');
+        const addTextBtn = document.getElementById('addTextBtn');
+        const addImageBtn = document.getElementById('addImageBtn');
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        const exportBtn = document.getElementById('exportBtn');
+
+        // Initialize
+        function init() {
+            renderStage();
+            attachEventListeners();
+        }
+
+        // Event Listeners
+        function attachEventListeners() {
+            importBtn.addEventListener('click', () => fileInput.click());
+            pasteBtn.addEventListener('click', handlePasteHtml);
+            addTextBtn.addEventListener('click', () => handleAddElement('text'));
+            addImageBtn.addEventListener('click', () => handleAddElement('image'));
+            undoBtn.addEventListener('click', undo);
+            redoBtn.addEventListener('click', redo);
+            exportBtn.addEventListener('click', handleExport);
+
+            fileInput.addEventListener('change', handleFileUpload);
+            stage.addEventListener('click', handleStageClick);
+            stage.addEventListener('mousedown', handleMouseDown);
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            document.addEventListener('keydown', handleKeyDown);
+        }
+
+        // Render stage
+        function renderStage() {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            const body = doc.body;
+            
+            stageContainer.innerHTML = '';
+            
+            // Copy children from parsed HTML body
+            Array.from(body.children).forEach(child => {
+                const cloned = child.cloneNode(true);
+                addEditableAttributes(cloned);
+                stageContainer.appendChild(cloned);
+            });
+
+            // Copy styles from head
+            const style = doc.querySelector('style');
+            if (style) {
+                const styleEl = document.createElement('style');
+                styleEl.textContent = style.textContent;
+                stageContainer.appendChild(styleEl);
+            }
+        }
+
+        // Add editable attributes
+        function addEditableAttributes(el) {
+            if (el.tagName !== 'STYLE' && el.tagName !== 'SCRIPT') {
+                el.setAttribute('data-editable', 'true');
+                if (el.tagName === 'DIV' || el.tagName === 'P' || el.tagName.match(/^H[1-6]$/)) {
+                    el.style.position = el.style.position || 'absolute';
+                } else if (el.tagName === 'IMG') {
+                    el.style.position = el.style.position || 'absolute';
+                }
+            }
+            Array.from(el.children).forEach(child => addEditableAttributes(child));
+        }
+
+        // Handle file upload
+        function handleFileUpload(e) {
+            const file = e.target.files?.[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target?.result;
+                    if (typeof content === 'string') {
+                        updateHistory(content);
+                        selectedElement = null;
+                        updateSelectionDisplay();
+                    }
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        // Handle paste HTML
+        function handlePasteHtml() {
+            const input = prompt('Paste your HTML content:');
+            if (input) {
+                updateHistory(input);
+                selectedElement = null;
+                updateSelectionDisplay();
+            }
+        }
+
+        // Handle stage click
+        function handleStageClick(e) {
+            const target = e.target;
+            if (target === stage || target === stageContainer) {
+                selectedElement = null;
+                updateSelectionDisplay();
+                return;
+            }
+
+            const element = target.closest('[data-editable]');
+            if (element && element.tagName !== 'STYLE') {
+                selectedElement = element;
+                updateSelectionDisplay();
+            }
+        }
+
+        // Update selection display
+        function updateSelectionDisplay() {
+            if (selectedElement) {
+                selectionBox.style.display = 'block';
+                selectionBox.style.left = (selectedElement.offsetLeft - 3) + 'px';
+                selectionBox.style.top = (selectedElement.offsetTop - 3) + 'px';
+                selectionBox.style.width = selectedElement.offsetWidth + 'px';
+                selectionBox.style.height = selectedElement.offsetHeight + 'px';
+                showProperties();
+                statusLeft.textContent = `Selected: ${selectedElement.tagName.toLowerCase()}`;
+            } else {
+                selectionBox.style.display = 'none';
+                propertiesPanel.innerHTML = '<div class="text-center text-gray-500 py-8">Click an element to select it</div>';
+                statusLeft.textContent = 'Ready';
+            }
+        }
+
+        // Show properties
+        function showProperties() {
+            if (!selectedElement) return;
+
+            const tag = selectedElement.tagName.toLowerCase();
+            let html = `<div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Element Type</label>
+                <div class="text-sm text-gray-600 bg-gray-50 p-2 rounded">${tag}</div>
+            </div>`;
+
+            if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'].includes(tag)) {
+                html += `
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Text Content</label>
+                        <textarea id="textInput" class="w-full p-2 border border-gray-300 rounded text-sm" rows="3">${selectedElement.innerText}</textarea>
+                    </div>
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Font Size</label>
+                        <input type="text" id="fontSizeInput" class="w-full p-2 border border-gray-300 rounded text-sm" placeholder="e.g., 24px" value="${selectedElement.style.fontSize || ''}">
+                    </div>
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Color</label>
+                        <input type="color" id="colorInput" class="w-full p-2 border border-gray-300 rounded" value="${selectedElement.style.color ? rgbToHex(selectedElement.style.color) : '#000000'}">
+                    </div>
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Font Weight</label>
+                        <select id="fontWeightInput" class="w-full p-2 border border-gray-300 rounded text-sm">
+                            <option value="normal" ${(selectedElement.style.fontWeight || 'normal') === 'normal' ? 'selected' : ''}>Normal</option>
+                            <option value="bold" ${selectedElement.style.fontWeight === 'bold' ? 'selected' : ''}>Bold</option>
+                            <option value="700" ${selectedElement.style.fontWeight === '700' ? 'selected' : ''}>700</option>
+                            <option value="600" ${selectedElement.style.fontWeight === '600' ? 'selected' : ''}>600</option>
+                        </select>
+                    </div>
+                `;
+            }
+
+            if (tag === 'img') {
+                html += `
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Image URL</label>
+                        <input type="text" id="srcInput" class="w-full p-2 border border-gray-300 rounded text-sm" value="${selectedElement.src || ''}">
+                    </div>
+                    <div class="mt-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Alt Text</label>
+                        <input type="text" id="altInput" class="w-full p-2 border border-gray-300 rounded text-sm" value="${selectedElement.alt || ''}">
+                    </div>
+                    <div class="mt-4 grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Width</label>
+                            <input type="text" id="widthInput" class="w-full p-2 border border-gray-300 rounded text-sm" placeholder="e.g., 200px" value="${selectedElement.style.width || selectedElement.getAttribute('width') || ''}">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Height</label>
+                            <input type="text" id="heightInput" class="w-full p-2 border border-gray-300 rounded text-sm" placeholder="e.g., 200px" value="${selectedElement.style.height || selectedElement.getAttribute('height') || ''}">
+                        </div>
+                    </div>
+                `;
+            }
+
+            html += '<button id="deleteBtn" class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition mt-4">🗑️ Delete Element</button>';
+
+            propertiesPanel.innerHTML = html;
+
+            // Attach property change listeners
+            document.getElementById('textInput')?.addEventListener('change', (e) => updateElementProperty('text', e.target.value));
+            document.getElementById('fontSizeInput')?.addEventListener('change', (e) => updateElementProperty('fontSize', e.target.value));
+            document.getElementById('colorInput')?.addEventListener('change', (e) => updateElementProperty('color', e.target.value));
+            document.getElementById('fontWeightInput')?.addEventListener('change', (e) => updateElementProperty('fontWeight', e.target.value));
+            document.getElementById('srcInput')?.addEventListener('change', (e) => updateElementProperty('src', e.target.value));
+            document.getElementById('altInput')?.addEventListener('change', (e) => updateElementProperty('alt', e.target.value));
+            document.getElementById('widthInput')?.addEventListener('change', (e) => updateElementProperty('width', e.target.value));
+            document.getElementById('heightInput')?.addEventListener('change', (e) => updateElementProperty('height', e.target.value));
+            document.getElementById('deleteBtn')?.addEventListener('click', handleDeleteElement);
+        }
+
+        // Update element property
+        function updateElementProperty(prop, value) {
+            if (!selectedElement) return;
+
+            if (prop === 'text') {
+                selectedElement.innerText = value;
+            } else if (prop === 'src') {
+                selectedElement.src = value;
+            } else if (prop === 'alt') {
+                selectedElement.alt = value;
+            } else if (prop === 'width') {
+                selectedElement.setAttribute('width', value);
+                selectedElement.style.width = value;
+            } else if (prop === 'height') {
+                selectedElement.setAttribute('height', value);
+                selectedElement.style.height = value;
+            } else if (['color', 'fontSize', 'fontWeight'].includes(prop)) {
+                selectedElement.style[prop] = value;
+            }
+
+            updateHistory(stageContainer.innerHTML);
+            updateSelectionDisplay();
+        }
+
+        // Handle add element
+        function handleAddElement(type) {
+            let newEl;
+            if (type === 'text') {
+                newEl = document.createElement('p');
+                newEl.innerText = 'New Text';
+                newEl.style.position = 'absolute';
+                newEl.style.top = '100px';
+                newEl.style.left = '100px';
+            } else if (type === 'image') {
+                newEl = document.createElement('img');
+                newEl.src = 'https://via.placeholder.com/200';
+                newEl.alt = 'Placeholder';
+                newEl.style.position = 'absolute';
+                newEl.style.top = '100px';
+                newEl.style.left = '100px';
+                newEl.style.width = '200px';
+                newEl.style.height = '200px';
+            }
+
+            if (newEl) {
+                newEl.setAttribute('data-editable', 'true');
+                stageContainer.appendChild(newEl);
+                updateHistory(stageContainer.innerHTML);
+                selectedElement = newEl;
+                updateSelectionDisplay();
+            }
+        }
+
+        // Handle delete element
+        function handleDeleteElement() {
+            if (selectedElement) {
+                selectedElement.remove();
+                selectedElement = null;
+                updateHistory(stageContainer.innerHTML);
+                updateSelectionDisplay();
+            }
+        }
+
+        // Handle mouse down
+        function handleMouseDown(e) {
+            if (!selectedElement || !selectedElement.style.position) return;
+            if (e.target === propertiesPanel || propertiesPanel.contains(e.target)) return;
+
+            isDragging = true;
+            const rect = selectedElement.getBoundingClientRect();
+            const stageRect = stage.getBoundingClientRect();
+            dragOffset.x = e.clientX - rect.left;
+            dragOffset.y = e.clientY - rect.top;
+        }
+
+        // Handle mouse move
+        function handleMouseMove(e) {
+            if (!isDragging || !selectedElement) return;
+
+            const stageRect = stage.getBoundingClientRect();
+            const x = e.clientX - stageRect.left - dragOffset.x;
+            const y = e.clientY - stageRect.top - dragOffset.y;
+
+            selectedElement.style.left = Math.max(0, Math.min(x, 720)) + 'px';
+            selectedElement.style.top = Math.max(0, Math.min(y, 720)) + 'px';
+            updateSelectionDisplay();
+        }
+
+        // Handle mouse up
+        function handleMouseUp() {
+            if (isDragging && selectedElement) {
+                isDragging = false;
+                updateHistory(stageContainer.innerHTML);
+            }
+        }
+
+        // Handle key down
+        function handleKeyDown(e) {
+            if (e.key === 'Delete' && selectedElement) {
+                handleDeleteElement();
+            } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                undo();
+            } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                e.preventDefault();
+                redo();
+            }
+        }
+
+        // Handle export
+        function handleExport() {
+            const exportHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta data-generated-by="editable-html-poster" />
+<title>Exported Poster</title>
+<style>
+body { margin: 0; padding: 0; }
+${stageContainer.querySelector('style')?.textContent || '.poster { width: 720px; height: 720px; position: relative; }'}
+</style>
+</head>
+<body>
+${stageContainer.innerHTML}
+</body>
+</html>`;
+
+            const blob = new Blob([exportHtml], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'poster.html';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Update history
+        function updateHistory(newHtml) {
+            const newHistory = history.slice(0, historyIndex + 1);
+            newHistory.push(newHtml);
+            history = newHistory;
+            historyIndex = history.length - 1;
+            htmlContent = newHtml;
+            updateHistoryButtons();
+        }
+
+        // Undo
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                htmlContent = history[historyIndex];
+                renderStage();
+                selectedElement = null;
+                updateSelectionDisplay();
+                updateHistoryButtons();
+            }
+        }
+
+        // Redo
+        function redo() {
+            if (historyIndex < history.length - 1) {
+                historyIndex++;
+                htmlContent = history[historyIndex];
+                renderStage();
+                selectedElement = null;
+                updateSelectionDisplay();
+                updateHistoryButtons();
+            }
+        }
+
+        // Update history buttons
+        function updateHistoryButtons() {
+            undoBtn.disabled = historyIndex === 0;
+            redoBtn.disabled = historyIndex === history.length - 1;
+        }
+
+        // RGB to Hex
+        function rgbToHex(rgb) {
+            if (!rgb || !rgb.includes('rgb')) return '#000000';
+            const result = rgb.match(/\d+/g);
+            if (!result || result.length < 3) return '#000000';
+            const r = parseInt(result[0]).toString(16).padStart(2, '0');
+            const g = parseInt(result[1]).toString(16).padStart(2, '0');
+            const b = parseInt(result[2]).toString(16).padStart(2, '0');
+            return `#${r}${g}${b}`;
+        }
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
